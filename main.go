@@ -3,11 +3,13 @@ package main
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"github.com/google/uuid"
 	_ "github.com/lib/pq"
 	"github.com/ricardosilva86/blogaggregator/internal/config"
 	"github.com/ricardosilva86/blogaggregator/internal/database"
+	"github.com/ricardosilva86/blogaggregator/internal/utils"
 	"os"
 	"time"
 )
@@ -69,8 +71,11 @@ func main() {
 	cmds.register("reset", handlerReset)
 	cmds.register("users", handlerListUsers)
 	cmds.register("agg", handlerAgg)
-	cmds.register("addfeed", handlerAddFeed)
+	cmds.register("addfeed", middlewareLoggedIn(handlerAddFeed))
 	cmds.register("feeds", handlerFeeds)
+	cmds.register("follow", middlewareLoggedIn(handleFollow))
+	cmds.register("following", middlewareLoggedIn(handleFollowing))
+	cmds.register("unfollow", middlewareLoggedIn(handleUnfollow))
 
 	args := os.Args
 	err = cmds.run(s, command{
@@ -81,6 +86,21 @@ func main() {
 		fmt.Println(fmt.Errorf("error running command: %w", err))
 	}
 
+}
+
+func middlewareLoggedIn(handler func(s *state, cmd command, user database.User) error) func(*state, command) error {
+	return func(s *state, c command) error {
+		if s.cfg.CurrentUserName == "" {
+			return errors.New("not logged in")
+		}
+		user, err := s.db.GetUserByName(context.Background(), s.cfg.CurrentUserName)
+		if err != nil {
+			fmt.Println("You can't login to an account that doesn't exist!")
+			return err
+		}
+		// Call the original handler function
+		return handler(s, c, user)
+	}
 }
 
 func handlerLogin(s *state, c command) error {
@@ -161,36 +181,32 @@ func handlerListUsers(s *state, c command) error {
 }
 
 func handlerAgg(s *state, c command) error {
-	url := "https://www.wagslane.dev/index.xml"
-	ctx := context.Background()
-
-	feed, err := config.FetchFeed(ctx, url)
+	if len(c.args) == 0 {
+		return fmt.Errorf("no time provided")
+	}
+	t := c.args[0]
+	timeBetweenRequests, err := time.ParseDuration(t)
 	if err != nil {
-		return err
+		return fmt.Errorf("error parsing time: %w", err)
+	}
+	fmt.Printf("Collecting feeds every %s...\n", timeBetweenRequests)
+	ticker := time.NewTicker(timeBetweenRequests)
+	for ; ; <-ticker.C {
+		fmt.Println("Scraping feeds...")
+		err := utils.ScrapeFeeds(s.db)
+		if err != nil {
+			return fmt.Errorf("error scraping feeds: %w", err)
+		}
 	}
 
-	//for _, item := range feed.Channel.Item {
-	//	fmt.Println(html.UnescapeString(item.Title))
-	//}
-
-	fmt.Printf("%+v\n", feed)
-
-	return nil
 }
 
-func handlerAddFeed(s *state, c command) error {
+func handlerAddFeed(s *state, c command, user database.User) error {
 	if len(c.args) == 0 {
 		fmt.Println("missing name and url")
 		os.Exit(1)
 	} else if len(c.args) == 1 {
 		fmt.Println("missing url")
-		os.Exit(1)
-	}
-
-	name := s.cfg.CurrentUserName
-	u, err := s.db.GetUserByName(context.Background(), name)
-	if err != nil {
-		fmt.Printf("cannot find user %s\n", name)
 		os.Exit(1)
 	}
 
@@ -200,13 +216,29 @@ func handlerAddFeed(s *state, c command) error {
 		Url:       c.args[1],
 		CreatedAt: time.Now(),
 		UpdatedAt: time.Now(),
-		UserID:    u.ID,
+		UserID:    user.ID,
 	}
 	f, err := s.db.CreateFeed(context.Background(), feedParams)
 	if err != nil {
 		fmt.Printf("error creating feed: %w\n", err)
 		os.Exit(1)
 	}
+
+	// once the new feed is created
+	// the user will automatically follow it
+	feedFollowParams := database.CreateFeedFollowParams{
+		ID:        uuid.New(),
+		UpdatedAt: time.Now(),
+		CreatedAt: time.Now(),
+		UserID:    user.ID,
+		FeedID:    f.ID,
+	}
+	_, err = s.db.CreateFeedFollow(context.Background(), feedFollowParams)
+	if err != nil {
+		fmt.Printf("failed to follow newly created feed: %w\n", err)
+		os.Exit(1)
+	}
+
 	fmt.Printf("%+v", f)
 
 	return nil
@@ -223,6 +255,57 @@ func handlerFeeds(s *state, c command) error {
 		fmt.Println(feed.Name)
 		fmt.Println(feed.Url)
 		fmt.Println(feed.Name_2)
+	}
+	return nil
+}
+
+func handleFollow(s *state, c command, user database.User) error {
+	url := c.args[0]
+	feed, err := s.db.GetFeedByURL(context.Background(), url)
+	if err != nil {
+		fmt.Printf("error querying feed: %w\n", err)
+		os.Exit(1)
+	}
+
+	feedFollowParams := database.CreateFeedFollowParams{
+		ID:        uuid.New(),
+		UpdatedAt: time.Now(),
+		CreatedAt: time.Now(),
+		UserID:    user.ID,
+		FeedID:    feed.ID,
+	}
+
+	feedFollow, err := s.db.CreateFeedFollow(context.Background(), feedFollowParams)
+	if err != nil {
+		fmt.Printf("error following feed with url: %w\n", err)
+	}
+
+	fmt.Println(feedFollow)
+
+	return nil
+}
+
+func handleFollowing(s *state, c command, user database.User) error {
+	feeds, err := s.db.GetFeedFollowsForUser(context.Background(), user.ID)
+	if err != nil {
+		fmt.Printf("failed to fetch follows for user %s: %w\n", user.Name, err)
+		return err
+	}
+	fmt.Printf("%v\n", feeds)
+	for _, feed := range feeds {
+		fmt.Println(feed.Feedname)
+	}
+	return nil
+}
+
+func handleUnfollow(s *state, c command, user database.User) error {
+	feedFollow := database.DeleteFeedFollowParams{
+		UserID: user.ID,
+		Url:    c.args[0],
+	}
+	if err := s.db.DeleteFeedFollow(context.Background(), feedFollow); err != nil {
+		fmt.Printf("error unfollowing feed: %w\n", err)
+		os.Exit(1)
 	}
 	return nil
 }

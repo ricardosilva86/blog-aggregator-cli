@@ -7,3 +7,17 @@ returning *;
 select * from feeds
 join users
 on users.id = feeds.user_id;
+
+-- name: GetFeedByURL :one
+select * from feeds
+where url = $1;
+
+-- name: MarkFeedFetched :one
+update feeds set updated_at = now(), last_fetched_at = now()
+where id = $1
+returning *;
+
+-- name: GetNextFeedToFetch :one
+select * from feeds
+order by feeds.last_fetched_at NULLS FIRST
+limit 1;

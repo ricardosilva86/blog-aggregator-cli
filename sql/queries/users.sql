@@ -16,3 +16,4 @@ where name = $1 limit 1;
 
 -- name: ResetUsers :exec
 delete from users;
+
