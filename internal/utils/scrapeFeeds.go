@@ -26,16 +26,11 @@ func ScrapeFeeds(db *database.Queries) error {
 	}
 
 	for _, item := range newFeed.Channel.Item {
-		longLayout := "Mon, 02 Jan 2006 15:04:05 -0700"
-		shortLayout := "2006-Jan-02"
-		pubDate := time.Now()
-		if pubDate, err = time.Parse(longLayout, item.PubDate); err != nil {
-			return fmt.Errorf("error parsing date: %w", err)
+		pubDate, err := parseDate(item.PubDate)
+		if err != nil {
+			fmt.Printf("Error type: %T\nError message: %v\n", err, err)
+			continue
 		}
-		if pubDate, err = time.Parse(shortLayout, pubDate.Format(shortLayout)); err != nil {
-			return fmt.Errorf("error parsing date: %w", err)
-		}
-
 		createPostParams := database.CreatePostParams{
 			ID:          uuid.New(),
 			FeedID:      feed.ID,
@@ -54,4 +49,22 @@ func ScrapeFeeds(db *database.Queries) error {
 	}
 
 	return nil
+}
+
+func parseDate(dateStr string) (time.Time, error) {
+	layouts := []string{
+		time.RFC1123,
+		time.RFC1123Z,
+		"Mon, 02 Jan 2006 15:04:05 -0700",
+		"2006-01-02T15:04:05Z",
+		"2006-01-02 15:04:05",
+	}
+
+	for _, layout := range layouts {
+		if t, err := time.Parse(layout, dateStr); err == nil {
+			return t, nil
+		}
+	}
+
+	return time.Time{}, fmt.Errorf("could not parse date: %s", dateStr)
 }
