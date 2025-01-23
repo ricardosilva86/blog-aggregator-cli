@@ -95,6 +95,7 @@ const listFeeds = `-- name: ListFeeds :many
 select feeds.id, feeds.name, url, user_id, feeds.created_at, feeds.updated_at, last_fetched_at, users.id, users.name, users.created_at, users.updated_at from feeds
 join users
 on users.id = feeds.user_id
+where user_id = $1
 `
 
 type ListFeedsRow struct {
@@ -111,8 +112,8 @@ type ListFeedsRow struct {
 	UpdatedAt_2   time.Time
 }
 
-func (q *Queries) ListFeeds(ctx context.Context) ([]ListFeedsRow, error) {
-	rows, err := q.db.QueryContext(ctx, listFeeds)
+func (q *Queries) ListFeeds(ctx context.Context, userID uuid.UUID) ([]ListFeedsRow, error) {
+	rows, err := q.db.QueryContext(ctx, listFeeds, userID)
 	if err != nil {
 		return nil, err
 	}

@@ -72,10 +72,11 @@ func main() {
 	cmds.register("users", handlerListUsers)
 	cmds.register("agg", handlerAgg)
 	cmds.register("addfeed", middlewareLoggedIn(handlerAddFeed))
-	cmds.register("feeds", handlerFeeds)
+	cmds.register("feeds", middlewareLoggedIn(handlerFeeds))
 	cmds.register("follow", middlewareLoggedIn(handleFollow))
 	cmds.register("following", middlewareLoggedIn(handleFollowing))
 	cmds.register("unfollow", middlewareLoggedIn(handleUnfollow))
+	cmds.register("browse", middlewareLoggedIn(handleBrowse))
 
 	args := os.Args
 	err = cmds.run(s, command{
@@ -244,8 +245,8 @@ func handlerAddFeed(s *state, c command, user database.User) error {
 	return nil
 }
 
-func handlerFeeds(s *state, c command) error {
-	feeds, err := s.db.ListFeeds(context.Background())
+func handlerFeeds(s *state, c command, user database.User) error {
+	feeds, err := s.db.ListFeeds(context.Background(), user.ID)
 	if err != nil {
 		fmt.Printf("failed to fetch feeds: %w\n", err)
 		os.Exit(1)
@@ -307,5 +308,28 @@ func handleUnfollow(s *state, c command, user database.User) error {
 		fmt.Printf("error unfollowing feed: %w\n", err)
 		os.Exit(1)
 	}
+	return nil
+}
+
+func handleBrowse(s *state, c command, user database.User) error {
+	listFeeds, err := s.db.ListFeeds(context.Background(), user.ID)
+	if err != nil {
+		return fmt.Errorf("error fetching posts for feed: %w\n", err)
+	}
+
+	for _, feed := range listFeeds {
+		postParams := database.GetPostsForFeedOfUserParams{
+			FeedID: feed.ID,
+			UserID: user.ID,
+		}
+		posts, err := s.db.GetPostsForFeedOfUser(context.Background(), postParams)
+		if err != nil {
+			return fmt.Errorf("error fetching list of posts for feed: %s. Error is: %w\n", feed.Name, err)
+		}
+		for _, post := range posts {
+			fmt.Println(post.Title, post.Url, post.PublishedAt)
+		}
+	}
+
 	return nil
 }

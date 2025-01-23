@@ -6,7 +6,8 @@ returning *;
 -- name: ListFeeds :many
 select * from feeds
 join users
-on users.id = feeds.user_id;
+on users.id = feeds.user_id
+where user_id = $1;
 
 -- name: GetFeedByURL :one
 select * from feeds
